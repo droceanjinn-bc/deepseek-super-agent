@@ -245,7 +245,7 @@ human-driven acceptance channel used by `pnpm demo` here.
 |----------|-------|-------|
 | `01-parallel-github` | 3 real issues | 3 tickets, 3 distinct WorkerSessions, same-burst start, `parallel workers=3`, live assistant turns, real comment per issue re-read from the API |
 | `02-spill-github` | 1 real issue + 2 real comments | 1 ticket, `bypass=subscription` twice, 2 spill bodies equal to the API payloads, page-wise `read_object` reassembly, live worker read the known-good commit, real comment |
-| `03-watchdog-github` | 1 real issue with a blocking reproduction | `[watchdog] nudge` then `[watchdog] fail`, `ticket.ended.by=watchdog`, durable `watchdog.nudge`/`watchdog.fail` events, real acknowledgement comment |
+| `03-watchdog-github` | 1 real issue with a blocking reproduction | `[watchdog] nudge` then `[watchdog] fail`, assignment ended with `report.kind=failed` while the ticket stays open for a retry (`ticket.ended` unset), durable `watchdog.nudge`/`watchdog.fail` events, real acknowledgement comment |
 
 Run:
 

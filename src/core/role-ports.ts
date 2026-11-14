@@ -3,6 +3,7 @@ import {
   rolePortBrand,
   ROUTER_ONLY_OPS,
   type AssessmentOutcome,
+  type ReportContext,
   type RolePorts,
   type RouterOnlyOp,
   type RouterPorts,
@@ -36,7 +37,7 @@ export function bindRolePorts(engine: Engine): RolePorts {
     ),
   }
   const workerMethods: Omit<WorkerPorts, typeof rolePortBrand> = {
-    report: (ticketId: string, report: WorkerReport) => engine.report(ticketId, report),
+    report: (ticketId: string, report: WorkerReport, context?: ReportContext) => engine.report(ticketId, report, context),
     subscribe: (ticketId: string, threadKey: string, opts?: { contextOnly?: boolean }): void => {
       engine.subscribe(ticketId, threadKey, opts)
     },

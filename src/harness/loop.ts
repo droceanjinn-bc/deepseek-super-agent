@@ -461,7 +461,7 @@ export class Harness {
     if (node) this.opts.assignmentPlaced(ticket.id, assignment.id, node)
     return this.enqueue(
       sessionId,
-      () => this.run(sessionId, 'worker', ticket.id, this.workerTask(ticket, node)),
+      () => this.run(sessionId, 'worker', ticket.id, this.workerTask(ticket, node), assignment.id),
     ).finally(() => {
       this.activeWorkers.delete(ticket.id)
       this.pump()
@@ -527,7 +527,14 @@ export class Harness {
     const refs = formatRefs(trigger.refs)
     if (refs) lines.push(refs)
     const sessionId = workerSessionId(ticketId)
-    return this.track(this.enqueue(sessionId, () => this.run(sessionId, 'worker', ticketId, lines.join('\n'))))
+    const assignmentId = this.opts.store.getDoc<Ticket>('ticket', ticketId)?.assignments.at(-1)?.id
+    return this.track(this.enqueue(sessionId, () => this.run(
+      sessionId,
+      'worker',
+      ticketId,
+      lines.join('\n'),
+      assignmentId,
+    )))
   }
 
   /**
@@ -599,7 +606,13 @@ export class Harness {
         return Promise.resolve()
       }
       const guidance = this.opts.takeGuidance?.(ticket.id, role) ?? []
-      return this.run(session, role, role === 'worker' ? ticket.id : undefined, build(guidance))
+      return this.run(
+        session,
+        role,
+        role === 'worker' ? ticket.id : undefined,
+        build(guidance),
+        role === 'worker' ? assignment.id : undefined,
+      )
     }
 
     let chain: Promise<void> = Promise.resolve()
@@ -659,7 +672,13 @@ export class Harness {
             this.opts.teams.reportFromMember(job.id, 'member done', 'succeeded')
             this.opts.log(`[team] member done teamId=${teamId} jobId=${job.id}`)
             const prompt = `TEAM_MEMBER_DONE\nteamId=${teamId}\njobId=${job.id}\nticketId=${job.ticketId}\naggregate=${this.opts.teams.aggregateReport(teamId)}`
-            const turn = this.enqueue(job.sessionId, () => this.run(job.sessionId, 'worker', job.ticketId, prompt))
+            const turn = this.enqueue(job.sessionId, () => this.run(
+              job.sessionId,
+              'worker',
+              job.ticketId,
+              prompt,
+              this.opts.store.getDoc<Ticket>('ticket', job.ticketId)?.assignments.at(-1)?.id,
+            ))
             this.track(turn)
             turn.then(() => resolve(), reject)
             return
@@ -668,7 +687,13 @@ export class Harness {
           this.opts.log(`[job] async job finished jobId=${job.id} status=succeeded`)
           this.opts.log(`[job] completion trigger session=${job.sessionId} jobId=${job.id}`)
           const prompt = `JOB_DONE\njobId=${job.id}\nticketId=${job.ticketId}`
-          const turn = this.enqueue(job.sessionId, () => this.run(job.sessionId, 'worker', job.ticketId, prompt))
+          const turn = this.enqueue(job.sessionId, () => this.run(
+              job.sessionId,
+              'worker',
+              job.ticketId,
+              prompt,
+              this.opts.store.getDoc<Ticket>('ticket', job.ticketId)?.assignments.at(-1)?.id,
+            ))
           this.track(turn)
           turn.then(() => resolve(), reject)
         } catch (error) {
@@ -803,7 +828,13 @@ export class Harness {
     return next
   }
 
-  private async run(sessionId: string, role: Role, ticketId: string | undefined, prompt: string): Promise<void> {
+  private async run(
+    sessionId: string,
+    role: Role,
+    ticketId: string | undefined,
+    prompt: string,
+    assignmentId?: string,
+  ): Promise<void> {
     if (!this.opts.store.isOpen) return
     // A resident Router owns one stable creation time; a ticket turn must not
     // reset it like a per-Ticket Worker session.
@@ -825,7 +856,7 @@ export class Harness {
         log: this.opts.log,
         metrics: this.opts.metrics,
         redact: this.opts.redact,
-        session: { id: sessionId, role, ticketId },
+        session: { id: sessionId, role, ticketId, assignmentId },
         prompt,
         prompts: this.opts.prompts,
         localAgents: this.opts.localAgents,
@@ -854,7 +885,7 @@ export async function runTurn(input: {
   log: (line: string) => void
   metrics: Metrics
   redact: (text: string) => string
-  session: { id: string; role: Role; ticketId?: string }
+  session: { id: string; role: Role; ticketId?: string; assignmentId?: string }
   prompt: string
   prompts?: PromptFiles
   localAgents?: readonly LocalAgentInfo[]
@@ -873,7 +904,7 @@ async function runTurnBody(input: {
   log: (line: string) => void
   metrics: Metrics
   redact: (text: string) => string
-  session: { id: string; role: Role; ticketId?: string }
+  session: { id: string; role: Role; ticketId?: string; assignmentId?: string }
   prompt: string
   prompts?: PromptFiles
   localAgents?: readonly LocalAgentInfo[]
@@ -977,6 +1008,7 @@ async function runTurnBody(input: {
           sessionId: input.session.id,
           role: input.session.role,
           ticketId: input.session.ticketId,
+          assignmentId: input.session.assignmentId,
         })
         content = redact(JSON.stringify(result))
       } catch (error) {

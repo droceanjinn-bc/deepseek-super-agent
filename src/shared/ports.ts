@@ -34,6 +34,17 @@ export interface WorkerReport {
 }
 
 /**
+ * Who is reporting and which Assignment the report belongs to. The Engine
+ * uses it to drop late or stale reports instead of rewriting a newer turn.
+ */
+export interface ReportContext {
+  /** Session that produced the report. */
+  sessionId?: string
+  /** Assignment the reporting turn was started for. */
+  assignmentId?: string
+}
+
+/**
  * Eval result handed to `decide` by the Main Agent. Executors never construct
  * this call. `accept` carries the Mandate scope; it is not the Ticket title.
  */
@@ -80,7 +91,7 @@ export type MainAgentPorts = RouterPorts
  */
 export interface WorkerPorts {
   readonly [rolePortBrand]: 'worker'
-  report(ticketId: string, report: WorkerReport): {
+  report(ticketId: string, report: WorkerReport, context?: ReportContext): {
     surfaced: boolean
     verdict: 'deliver' | 'discard' | 'hold'
   }
