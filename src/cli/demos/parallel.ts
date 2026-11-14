@@ -88,7 +88,25 @@ export async function runParallelDemo() {
     check(ctx, 'three independent tickets', tickets.length === 3, tickets.map(ticket => ticket.id).join(','))
     runtime.log.info(`[demo] tickets ${tickets.map(ticket => ticketLine(ticket)).join(' | ')}`)
 
-    const sessionIds = tickets.map(ticket => ticket.assignments.at(-1)?.workerSessionId ?? '')
+    // ingest() only stores the trigger: the executor starts the worker
+    // sessions in a later asynchronous round, so `workerSessionId` and
+    // `startedAt` do not exist yet at this point. Wait until all three
+    // sessions are really up before asserting on them — otherwise the
+    // checks below observe the pre-start state and fail for the wrong
+    // reason.
+    await waitFor(() => {
+      const rows = runtime.store.listDocs<Ticket>('ticket')
+      if (rows.length !== 3) return undefined
+      const started = rows.every(ticket => {
+        const assignment = ticket.assignments.at(-1)
+        if (!assignment?.workerSessionId || !assignment.startedAt) return false
+        return countLines(runtime, `ExecutorSession start session=${assignment.workerSessionId}`) >= 1
+      })
+      return started ? true : undefined
+    }, 60_000, 100)
+
+    const active = runtime.store.listDocs<Ticket>('ticket')
+    const sessionIds = active.map(ticket => ticket.assignments.at(-1)?.workerSessionId ?? '')
     check(
       ctx,
       'each ticket has a distinct worker session',
@@ -96,7 +114,7 @@ export async function runParallelDemo() {
       `sessions=${sessionIds.join(',')}`,
     )
 
-    const started = tickets
+    const started = active
       .map(ticket => Date.parse(ticket.assignments.at(-1)?.startedAt ?? ''))
       .filter(value => Number.isFinite(value))
     const spreadMs = started.length === 3 ? Math.max(...started) - Math.min(...started) : Number.NaN
@@ -115,8 +133,8 @@ export async function runParallelDemo() {
       `parallel workers markers=${workers.join(',')}`,
     )
 
-    for (const ticket of tickets) {
-      const sessionId = `worker_${ticket.id}`
+    for (const ticket of active) {
+      const sessionId = ticket.assignments.at(-1)?.workerSessionId ?? `worker_${ticket.id}`
       check(
         ctx,
         `worker session started ${sessionId}`,
