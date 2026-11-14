@@ -18,6 +18,8 @@ export interface ToolSession {
   sessionId: string
   role: Role
   ticketId?: string
+  /** Assignment this turn was started for. Reports are bound to it. */
+  assignmentId?: string
 }
 
 /** Role-discriminated tool context. Workers receive WorkerPorts, never the Engine. */
@@ -26,6 +28,8 @@ export type ToolContext = {
     sessionId: string
     role: R
     ticketId?: string
+    /** Assignment this turn was started for. Reports are bound to it. */
+    assignmentId?: string
     ports: RolePortFor<R>
   }
 }[Role]
@@ -409,7 +413,10 @@ function executorTools(ports: RolePortFor<'worker'>, deps: WorkerToolDeps): Tool
         const deliver = args.deliver === true
         const text = String(args.text ?? '').replace(/\n/g, ' ')
         const kind = String(args.kind ?? (deliver ? 'ready' : 'progress'))
-        const result = ports.report(ticketId, { kind, text, deliver })
+        const result = ports.report(ticketId, { kind, text, deliver }, {
+          sessionId: ctx.sessionId,
+          assignmentId: ctx.assignmentId,
+        })
         settleSpeculation(env, ctx.sessionId, result.verdict)
         if (result.verdict === 'discard') log(`[speculate] rollback workdir session=${ctx.sessionId}`)
         // The gate, not the model, decides whether the router may speak.

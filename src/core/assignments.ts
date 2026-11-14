@@ -1,7 +1,7 @@
 import { HeuristicDeliverGate, type DeliverGate } from '../speculate/gate.ts'
 import type { SurfaceVerdict } from '../speculate/silent.ts'
 import { UserError } from '../shared/errors.ts'
-import type { WorkerReport } from '../shared/ports.ts'
+import type { ReportContext, WorkerReport } from '../shared/ports.ts'
 import type { Assignment, Ticket } from '../shared/types.ts'
 import { pendingApproval } from './collab.ts'
 import type { Host } from './host.ts'
@@ -75,7 +75,12 @@ export class Assignments {
    * A speculative discard ends the assignment and the ticket with no outbound copy.
    * Reports on an ended ticket never rewrite it.
    */
-  report(ticketId: string, report: WorkerReport, origin: ReportOrigin = 'worker'): ReportResult {
+  report(
+    ticketId: string,
+    report: WorkerReport,
+    origin: ReportOrigin = 'worker',
+    context?: ReportContext,
+  ): ReportResult {
     const ticket = this.must(ticketId)
     const assignment = ticket.assignments.at(-1)
     if (!assignment) throw new UserError(`ticket ${ticketId} has no assignment`)
@@ -89,6 +94,34 @@ export class Assignments {
         return { surfaced: false, verdict: 'hold' }
       }
       throw new UserError(`ticket ${ticketId} has already ended (${ticket.ended.outcome})`)
+    }
+    // Guard A: the Assignment already ended (watchdog failure, discard, or a
+    // completed turn). The Ticket may still be open and retried, so a late
+    // report is dropped instead of rewriting the ended Assignment.
+    if (assignment.state === 'ended') {
+      this.host.log(
+        `[engine] late report ignored ticketId=${ticket.id} assignmentId=${assignment.id} origin=${origin}`,
+      )
+      return { surfaced: false, verdict: 'hold' }
+    }
+    // Guard B: the report must belong to the Assignment and Session that are
+    // still current. After a retry the Ticket runs a new Assignment, and a
+    // report from the previous turn must not land on it.
+    if (context?.assignmentId !== undefined && context.assignmentId !== assignment.id) {
+      this.host.log(
+        `[engine] stale report ignored ticketId=${ticket.id} assignmentId=${assignment.id} origin=${origin} reportAssignmentId=${context.assignmentId}`,
+      )
+      return { surfaced: false, verdict: 'hold' }
+    }
+    if (
+      context?.sessionId !== undefined
+      && assignment.workerSessionId !== undefined
+      && assignment.workerSessionId !== context.sessionId
+    ) {
+      this.host.log(
+        `[engine] stale report ignored ticketId=${ticket.id} assignmentId=${assignment.id} origin=${origin} session=${context.sessionId} owner=${assignment.workerSessionId}`,
+      )
+      return { surfaced: false, verdict: 'hold' }
     }
     if (ticket.collab?.paused) {
       assignment.report = {

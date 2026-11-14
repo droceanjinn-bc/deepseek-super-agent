@@ -73,11 +73,22 @@ export async function runWatchdogDemo() {
     )
     check(ctx, 'watchdog failed the stuck assignment on the next tick', failed != null, failed ?? 'no fail before deadline')
 
+    // The watchdog fails the Assignment, not the Ticket, so the ticket stays
+    // open and retryable. Locate it by its real GitHub origin instead of by
+    // `ended.by === 'watchdog'`, which no longer happens.
     const ticket = await waitFor(() => {
       const docs = runtime.store.listDocs<Ticket>('ticket')
-      return docs.find(item => item.ended?.by === 'watchdog')
-    }, 10_000, 100)
-    check(ctx, 'ticket ended by watchdog', ticket != null, ticket ? ticketLine(ticket) : 'no watchdog-ended ticket')
+      return docs.find(item => {
+        const origin = originTrigger(runtime.store, item)
+        return origin?.source === 'github' && issueNumberForTicket(item) === issue.number
+      })
+    }, 15_000, 100)
+    check(
+      ctx,
+      'ticket from the real GitHub issue located',
+      ticket != null,
+      ticket ? ticketLine(ticket) : 'no ticket for the real GitHub issue',
+    )
 
     if (ticket) {
       const origin = originTrigger(runtime.store, ticket)
@@ -88,11 +99,24 @@ export async function runWatchdogDemo() {
         origin?.source === 'github' && issueNumber === issue.number,
         `origin=${origin?.id ?? '-'} issue=${String(issueNumber)} expected=#${issue.number}`,
       )
+      const assignment = ticket.assignments.at(-1)
+      check(
+        ctx,
+        'watchdog ended the assignment instead of the ticket',
+        assignment?.state === 'ended',
+        `assignmentState=${assignment?.state ?? '-'}`,
+      )
       check(
         ctx,
         'assignment report records the watchdog failure',
-        ticket.assignments.at(-1)?.report?.kind === 'failed',
-        `report=${ticket.assignments.at(-1)?.report?.kind ?? '-'}`,
+        assignment?.report?.kind === 'failed',
+        `report=${assignment?.report?.kind ?? '-'}`,
+      )
+      check(
+        ctx,
+        'ticket stays open for a retry',
+        ticket.ended === undefined,
+        `ticketEnded=${ticket.ended ? `${ticket.ended.outcome}/${ticket.ended.by}` : '-'}`,
       )
       const watchdogEvents = runtime.store.listEvents()
         .filter(event => event.type === 'watchdog.nudge' || event.type === 'watchdog.fail')
@@ -113,23 +137,26 @@ export async function runWatchdogDemo() {
       const proof = await verifyGithubOutbound(github, ticket, runtime.store)
       check(ctx, `real GitHub comment for #${issue.number}`, proof.ok, proof.detail)
 
-      // The watchdog is the reason the ticket ended; a live model call still
+      // The watchdog is the reason the assignment ended; a live model call still
       // proves the worker was real. Do not wait for the whole stalled turn.
       const latency = await waitFor(() => {
         const snapshot = runtime.metrics.snapshot().modelLatencyMs
         return snapshot.count >= 1 ? snapshot : undefined
       }, 30_000, 200)
       check(ctx, 'live model call recorded while the worker was stalled', latency != null, latency ? `count=${latency.count}` : 'no completed live call yet')
-      check(
-        ctx,
-        'watchdog fail did not emit a speculative/result reply',
-        runtime.store.listReplies().every(reply => reply.purpose !== 'result'),
-        runtime.store.listReplies().map(reply => reply.purpose).join(','),
-      )
 
       // Let the in-flight live turn reject/settle harmlessly after the snapshot.
       void runtime.jobsSettled().catch(() => undefined)
     }
+
+    // The watchdog failure must never surface a result reply, no matter whether
+    // the ticket itself was located above.
+    check(
+      ctx,
+      'watchdog fail did not emit a speculative/result reply',
+      runtime.store.listReplies().every(reply => reply.purpose !== 'result'),
+      runtime.store.listReplies().map(reply => reply.purpose).join(','),
+    )
 
     await closeGithubIssues(github, [issue])
   }, { jobDelayMs: 100, watchdogIntervalMs: 150, stuckMs: 400 })

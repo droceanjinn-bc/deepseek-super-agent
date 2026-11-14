@@ -360,6 +360,62 @@ describe('ended tickets', () => {
       .not.toThrow()
     expect(store.getDoc<Ticket>('ticket', second)?.ended?.outcome).toBe('stopped')
   })
+
+  // Guard A: watchdog fail ends the Assignment but not the Ticket. A late
+  // worker report must not revive the ended Assignment or emit a result reply.
+  it('ignores a late worker report after the watchdog ended the assignment', () => {
+    const { store, engine } = openStore()
+    engine.receive(imTrigger({
+      id: 'trg_guard_a',
+      thread: 'topic/guard-a',
+      text: '@ds-agent please fix the login timeout',
+      at: '2026-10-31T00:00:00.000Z',
+    }))
+    const ticketId = engine.evaluateDue()[0]!.ticketId!
+    engine.assignmentStarted(ticketId, store.getDoc<Ticket>('ticket', ticketId)!.assignments[0]!.id, workerSessionId(ticketId))
+    engine.watchdogFail(ticketId, 'stuck')
+    const afterFail = store.getDoc<Ticket>('ticket', ticketId)!
+    expect(afterFail.ended).toBeUndefined()
+    expect(afterFail.assignments[0]?.state).toBe('ended')
+
+    const repliesBefore = store.listReplies().filter(r => r.purpose === 'result').length
+    const result = engine.report(ticketId, { kind: 'ready', text: 'late answer', deliver: true })
+    expect(result).toEqual({ surfaced: false, verdict: 'hold' })
+    const ticket = store.getDoc<Ticket>('ticket', ticketId)!
+    expect(ticket.assignments[0]?.report?.text).not.toBe('late answer')
+    expect(ticket.assignments[0]?.state).toBe('ended')
+    expect(ticket.ended).toBeUndefined()
+    // The late report must not create a new result reply.
+    expect(store.listReplies().filter(r => r.purpose === 'result').length).toBe(repliesBefore)
+  })
+
+  // Guard B: after a retry creates a new Assignment, a report from the old
+  // Assignment must not land on the new one.
+  it('ignores a stale report from the previous assignment after retry', () => {
+    const { store, engine } = openStore()
+    engine.receive(imTrigger({
+      id: 'trg_guard_b',
+      thread: 'topic/guard-b',
+      text: '@ds-agent please fix the login timeout',
+      at: '2026-10-31T00:00:00.000Z',
+    }))
+    const ticketId = engine.evaluateDue()[0]!.ticketId!
+    const firstAssignment = store.getDoc<Ticket>('ticket', ticketId)!.assignments[0]!
+    engine.assignmentStarted(ticketId, firstAssignment.id, workerSessionId(ticketId))
+    engine.watchdogFail(ticketId, 'stuck')
+    engine.retryTicket(ticketId, 'retry after watchdog fail')
+    const ticketAfterRetry = store.getDoc<Ticket>('ticket', ticketId)!
+    expect(ticketAfterRetry.assignments).toHaveLength(2)
+    const secondAssignment = ticketAfterRetry.assignments[1]!
+    expect(secondAssignment.state).toBe('pending')
+
+    const result = engine.report(ticketId, { kind: 'ready', text: 'stale from old turn', deliver: true }, {
+      assignmentId: firstAssignment.id,
+    })
+    expect(result).toEqual({ surfaced: false, verdict: 'hold' })
+    const ticket = store.getDoc<Ticket>('ticket', ticketId)!
+    expect(ticket.assignments[1]?.report).toBeUndefined()
+  })
 })
 
 describe('speculative workdir', () => {

@@ -1,5 +1,5 @@
 import { maySurface } from '../speculate/gate.ts'
-import type { AssessmentOutcome, WorkerReport } from '../shared/ports.ts'
+import type { AssessmentOutcome, ReportContext, WorkerReport } from '../shared/ports.ts'
 import type { Decision, ReceiveResult, Ticket, Trigger, TriggerTrust } from '../shared/types.ts'
 import { Assignments, type Recovery, type ReportResult } from './assignments.ts'
 import {
@@ -81,8 +81,8 @@ export class Engine {
     this.host.repo.atomic(() => this.assignments.placed(ticketId, assignmentId, node))
   }
 
-  report(ticketId: string, report: WorkerReport): ReportResult {
-    return this.host.repo.atomic(() => this.assignments.report(ticketId, report))
+  report(ticketId: string, report: WorkerReport, context?: ReportContext): ReportResult {
+    return this.host.repo.atomic(() => this.assignments.report(ticketId, report, 'worker', context))
   }
 
   /** Start a new Assignment on the same Ticket after a failed or blocked turn. */
